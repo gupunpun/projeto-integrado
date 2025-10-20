@@ -1,0 +1,363 @@
+import sqlite3
+from datetime import datetime
+
+# Conexão com o banco de dados (SQLite)
+conn = sqlite3.connect('clinica.db')  # Renomeado para refletir o escopo ampliado
+cursor = conn.cursor()
+
+# Cria as tabelas se não existirem
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS pacientes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        idade INTEGER NOT NULL,
+        telefone TEXT
+    )
+''')
+
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS medicos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        especialidade TEXT NOT NULL,
+        telefone TEXT
+    )
+''')
+
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS exames (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome_exame TEXT NOT NULL,
+        descricao TEXT
+    )
+''')
+
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS agendamentos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        paciente_id INTEGER NOT NULL,
+        medico_id INTEGER NOT NULL,
+        exame_id INTEGER,  -- Opcional, para exames
+        tipo TEXT NOT NULL CHECK(tipo IN ('consulta', 'exame')),
+        data_hora TEXT NOT NULL,  -- Formato: YYYY-MM-DD HH:MM
+        status TEXT NOT NULL DEFAULT 'agendado' CHECK(status IN ('agendado', 'cancelado', 'realizado')),
+        FOREIGN KEY (paciente_id) REFERENCES pacientes(id),
+        FOREIGN KEY (medico_id) REFERENCES medicos(id),
+        FOREIGN KEY (exame_id) REFERENCES exames(id)
+    )
+''')
+
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS atendimentos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agendamento_id INTEGER NOT NULL,
+        notas TEXT,
+        evolucao TEXT,
+        data_atendimento TEXT NOT NULL,  -- Formato: YYYY-MM-DD
+        FOREIGN KEY (agendamento_id) REFERENCES agendamentos(id)
+    )
+''')
+
+conn.commit()
+
+# Fila de atendimentos (em memória, como lista de dicionários)
+fila_atendimentos = []
+
+def mostrar_menu():
+    """Exibe o menu de opções."""
+    print("=" * 40)
+    print("SISTEMA DE GERENCIAMENTO DE CLÍNICA")
+    print("=" * 40)
+    print("[1] Gerenciar Pacientes")
+    print("[2] Gerenciar Médicos")
+    print("[3] Gerenciar Exames")
+    print("[4] Agendar Consulta/Exame")
+    print("[5] Registrar Atendimento")
+    print("[6] Ver Histórico de Evolução de Paciente")
+    print("[7] Gerar Relatório Mensal")
+    print("[8] Gerenciar Fila de Atendimentos")  # Nova opção
+    print("[9] Encerrar")
+    print("=" * 40)
+
+def submenu_pacientes():
+    """Submenu para gerenciamento de pacientes."""
+    while True:
+        print("\n--- GERENCIAMENTO DE PACIENTES ---")
+        print("[1] Adicionar Novo Paciente")
+        print("[2] Ver Estatísticas e Resumo")
+        print("[3] Procurar Paciente por Nome")
+        print("[4] Listar Todos os Pacientes")
+        print("[5] Editar Paciente")
+        print("[6] Remover Paciente")
+        print("[7] Voltar ao Menu Principal")
+        
+        try:
+            selecao = int(input("Escolha uma opção (1-7): "))
+        except ValueError:
+            print("Opção inválida. Digite um número de 1 a 7.")
+            continue
+
+        if selecao == 1:
+            adicionar_paciente()
+        elif selecao == 2:
+            gerar_estatisticas()
+        elif selecao == 3:
+            procurar_paciente()
+        elif selecao == 4:
+            listar_todos()
+        elif selecao == 5:
+            editar_paciente()
+        elif selecao == 6:
+            remover_paciente()
+        elif selecao == 7:
+            break
+        else:
+            print("Opção inválida.")
+
+        input("\nPressione ENTER para continuar...")
+
+def adicionar_paciente():
+    """Permite adicionar um novo paciente com validação de entrada."""
+    print("\n--- ADIÇÃO DE PACIENTE ---")
+    nome_completo = input("Nome: ").strip().title()
+    if not nome_completo:
+        print("Erro: O nome não pode estar vazio.")
+        return
+
+    while True:
+        try:
+            anos = int(input("Idade: "))
+            if anos <= 0:
+                print("Erro: A idade deve ser um número positivo.")
+                continue
+            break
+        except ValueError:
+            print("Erro: Idade inválida. Digite um número inteiro.")
+
+    contato = input("Telefone: ").strip()
+
+    cursor.execute('INSERT INTO pacientes (nome, idade, telefone) VALUES (?, ?, ?)', (nome_completo, anos, contato))
+    conn.commit()
+    print(f"\nPaciente '{nome_completo}' adicionado com sucesso!")
+
+def gerar_estatisticas():
+    """Calcula e exibe o resumo e estatísticas dos pacientes."""
+    cursor.execute('SELECT COUNT(*), AVG(idade), MIN(idade), MAX(idade) FROM pacientes')
+    resultado = cursor.fetchone()
+    quantidade_total = resultado[0]
+    media_anos = resultado[1] or 0
+    min_idade = resultado[2] or 0
+    max_idade = resultado[3] or 0
+
+    print("\n--- ESTATÍSTICAS E RESUMO ---")
+    if quantidade_total == 0:
+        print("Nenhum paciente cadastrado para gerar estatísticas.")
+        return
+
+    print(f"Número Total de Pacientes: {quantidade_total}")
+    print(f"Idade Média dos Pacientes: {media_anos:.2f} anos")
+
+    cursor.execute('SELECT nome, idade FROM pacientes WHERE idade = ?', (min_idade,))
+    jovem = cursor.fetchone()
+    cursor.execute('SELECT nome, idade FROM pacientes WHERE idade = ?', (max_idade,))
+    idoso = cursor.fetchone()
+
+    print(f"\nPaciente Mais Novo: {jovem[0]}, Idade: {jovem[1]} anos")
+    print(f"Paciente Mais Velho: {idoso[0]}, Idade: {idoso[1]} anos")
+
+def procurar_paciente():
+    """Permite procurar um paciente pelo nome."""
+    print("\n--- PROCURAR PACIENTE ---")
+    pesquisa = input("Digite o nome ou parte do nome do paciente: ").strip().lower()
+
+    cursor.execute('SELECT nome, idade, telefone FROM pacientes WHERE LOWER(nome) LIKE ?', ('%' + pesquisa + '%',))
+    matches = cursor.fetchall()
+
+    if matches:
+        print(f"\n{len(matches)} Paciente(s) encontrado(s):")
+        for idx, paciente in enumerate(matches, start=1):
+            print(f"\n--- Resultado {idx} ---")
+            print(f"Nome: {paciente[0]}, Idade: {paciente[1]}, Telefone: {paciente[2]}")
+    else:
+        print(f"Nenhum paciente encontrado com '{pesquisa}'.")
+
+def listar_todos():
+    """Exibe todos os pacientes cadastrados de forma organizada."""
+    print("\n--- TODOS OS PACIENTES CADASTRADOS ---")
+    cursor.execute('SELECT nome, idade, telefone FROM pacientes')
+    pacientes = cursor.fetchall()
+
+    if not pacientes:
+        print("Nenhum paciente cadastrado.")
+        return
+
+    print(f"{'Nº':<4} | {'Nome':<25} | {'Idade':<6} | {'Telefone':<15}")
+    print("-" * 55)
+
+    for idx, paciente in enumerate(pacientes, start=1):
+        print(f"{idx:<4} | {paciente[0]:<25} | {paciente[1]:<6} | {paciente[2]:<15}")
+
+def editar_paciente():
+    """Permite editar os dados de um paciente existente."""
+    print("\n--- EDITAR PACIENTE ---")
+    pesquisa = input("Digite o nome exato do paciente a editar: ").strip().title()
+
+    cursor.execute('SELECT id, nome, idade, telefone FROM pacientes WHERE nome = ?', (pesquisa,))
+    paciente = cursor.fetchone()
+
+    if not paciente:
+        print(f"Paciente '{pesquisa}' não encontrado.")
+        return
+
+    paciente_id, nome_atual, idade_atual, telefone_atual = paciente
+    print(f"Editando dados de: {nome_atual}")
+    print("Deixe em branco para manter o valor atual.")
+
+    novo_nome = input(f"Nome atual: {nome_atual} | Novo nome: ").strip().title()
+    if novo_nome:
+        nome_atual = novo_nome
+
+    while True:
+        nova_idade_str = input(f"Idade atual: {idade_atual} | Nova idade: ").strip()
+        if not nova_idade_str:
+            break
+        try:
+            nova_idade = int(nova_idade_str)
+            if nova_idade <= 0:
+                print("Erro: A idade deve ser um número positivo.")
+                continue
+            idade_atual = nova_idade
+            break
+        except ValueError:
+            print("Erro: Idade inválida. Digite um número inteiro.")
+
+    novo_telefone = input(f"Telefone atual: {telefone_atual} | Novo telefone: ").strip()
+    if novo_telefone:
+        telefone_atual = novo_telefone
+
+    cursor.execute('UPDATE pacientes SET nome = ?, idade = ?, telefone = ? WHERE id = ?', (nome_atual, idade_atual, telefone_atual, paciente_id))
+    conn.commit()
+    print("Dados atualizados com sucesso!")
+
+def remover_paciente():
+    """Permite remover um paciente da lista."""
+    print("\n--- REMOVER PACIENTE ---")
+    pesquisa = input("Digite o nome exato do paciente a remover: ").strip().title()
+
+    cursor.execute('SELECT id, nome FROM pacientes WHERE nome = ?', (pesquisa,))
+    paciente = cursor.fetchone()
+
+    if not paciente:
+        print(f"Paciente '{pesquisa}' não encontrado.")
+        return
+
+    paciente_id, nome = paciente
+    confirmacao = input(f"Tem certeza que deseja remover '{nome}'? (s/n): ").strip().lower()
+    if confirmacao == 's':
+        cursor.execute('DELETE FROM pacientes WHERE id = ?', (paciente_id,))
+        conn.commit()
+        print("Paciente removido com sucesso!")
+    else:
+        print("Remoção cancelada.")
+
+# Funções para médicos
+def adicionar_medico():
+    """Adiciona um novo médico."""
+    print("\n--- ADIÇÃO DE MÉDICO ---")
+    nome = input("Nome: ").strip().title()
+    especialidade = input("Especialidade: ").strip().title()
+    telefone = input("Telefone: ").strip()
+
+    cursor.execute('INSERT INTO medicos (nome, especialidade, telefone) VALUES (?, ?, ?)', (nome, especialidade, telefone))
+    conn.commit()
+    print(f"Médico '{nome}' adicionado com sucesso!")
+
+def listar_medicos():
+    """Lista todos os médicos."""
+    cursor.execute('SELECT nome, especialidade, telefone FROM medicos')
+    medicos = cursor.fetchall()
+    if not medicos:
+        print("Nenhum médico cadastrado.")
+        return
+    print(f"{'Nome':<25} | {'Especialidade':<20} | {'Telefone':<15}")
+    print("-" * 65)
+    for medico in medicos:
+        print(f"{medico[0]:<25} | {medico[1]:<20} | {medico[2]:<15}")
+
+# Funções para exames
+def adicionar_exame():
+    """Adiciona um novo exame."""
+    print("\n--- ADIÇÃO DE EXAME ---")
+    nome_exame = input("Nome do Exame: ").strip().title()
+    descricao = input("Descrição: ").strip()
+
+    cursor.execute('INSERT INTO exames (nome_exame, descricao) VALUES (?, ?)', (nome_exame, descricao))
+    conn.commit()
+    print(f"Exame '{nome_exame}' adicionado com sucesso!")
+
+def listar_exames():
+    """Lista todos os exames."""
+    cursor.execute('SELECT nome_exame, descricao FROM exames')
+    exames = cursor.fetchall()
+    if not exames:
+        print("Nenhum exame cadastrado.")
+        return
+    print(f"{'Nome do Exame':<25} | {'Descrição':<40}")
+    print("-" * 70)
+    for exame in exames:
+        print(f"{exame[0]:<25} | {exame[1]:<40}")
+
+# Funções para agendamentos
+def agendar_consulta_exame():
+    """Agenda uma consulta ou exame, verificando conflitos de horário."""
+    print("\n--- AGENDAR CONSULTA/EXAME ---")
+    tipo = input("Tipo (consulta/exame): ").strip().lower()
+    if tipo not in ['consulta', 'exame']:
+        print("Tipo inválido.")
+        return
+
+    paciente_nome = input("Nome do Paciente: ").strip().title()
+    cursor.execute('SELECT id FROM pacientes WHERE nome = ?', (paciente_nome,))
+    paciente = cursor.fetchone()
+    if not paciente:
+        print("Paciente não encontrado.")
+        return
+    paciente_id = paciente[0]
+
+    medico_nome = input("Nome do Médico: ").strip().title()
+    cursor.execute('SELECT id FROM medicos WHERE nome = ?', (medico_nome,))
+    medico = cursor.fetchone()
+    if not medico:
+        print("Médico não encontrado.")
+        return
+    medico_id = medico[0]
+
+    exame_id = None
+    if tipo == 'exame':
+        exame_nome = input("Nome do Exame: ").strip().title()
+        cursor.execute('SELECT id FROM exames WHERE nome_exame = ?', (exame_nome,))
+        exame = cursor.fetchone()
+        if not exame:
+            print("Exame não encontrado.")
+            return
+        exame_id = exame[0]
+
+    data_hora = input("Data e Hora (YYYY-MM-DD HH:MM): ").strip()
+    try:
+        datetime.strptime(data_hora, '%Y-%m-%d %H:%M')
+        if datetime.strptime(data_hora, '%Y-%m-%d %H:%M') < datetime.now():
+            print("Erro: Não é possível agendar para datas passadas.")
+            return
+    except ValueError:
+        print("Formato de data/hora inválido.")
+        return
+
+    # Verificar conflito de horário
+    cursor.execute('SELECT id FROM agendamentos WHERE medico_id = ? AND data_hora = ? AND status != "cancelado"', (medico_id, data_hora))
+    if cursor.fetchone():
+        print("Conflito de horário: O médico já tem um agendamento neste horário.")
+        return
+
+    cursor.execute('INSERT INTO agendamentos (paciente_id, medico_id, exame_id, tipo, data_hora) VALUES (?, ?, ?, ?, ?)', (paciente_id, medico_id, exame_id, tipo, data_hora))
+    conn.commit()
+    print("Agendamento realizado com
